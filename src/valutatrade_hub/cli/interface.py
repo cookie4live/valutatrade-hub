@@ -1,6 +1,11 @@
 
 import shlex
 
+from valutatrade_hub.core.exceptions import (
+    ApiRequestError,
+    CurrencyNotFoundError,
+    InsufficientFundsError,
+)
 from valutatrade_hub.core.usecases import (
     buy,
     get_portfolio,
@@ -110,14 +115,29 @@ def main():
                     print(f"{pair}: {rate}")
                 print(f"Последнее обновление: {rates['last_refresh']}")
 
+            
             else:
                 print("Неизвестная команда или неверные аргументы.")
 
+        except InsufficientFundsError as error:
+            print(error)
+
+        except CurrencyNotFoundError as error:
+            print(error)
+            print("Введите help для просмотра команд и поддерживаемых валют.")
+
+        except ApiRequestError as error:
+            print(error)
+            print("Попробуйте повторить операцию позже или проверьте интернет.")
+
         except ValueError as error:
             print(f"Ошибка: {error}")
+
         except Exception as error:
             print(f"Ошибка выполнения: {error}")
 
 
+
 if __name__ == "__main__":
     main()
+

@@ -1,10 +1,15 @@
-
+from datetime import datetime, timezone
 
 from valutatrade_hub.core.currencies import get_currency
-from valutatrade_hub.core.exceptions import CurrencyNotFoundError
+from valutatrade_hub.core.exceptions import (
+    ApiRequestError,
+    CurrencyNotFoundError,
+)
 from valutatrade_hub.core.models import Portfolio, User
 from valutatrade_hub.decorators import log_action
 from valutatrade_hub.infra.database import DatabaseManager
+from valutatrade_hub.infra.settings import SettingsLoader
+from valutatrade_hub.parser_service.updater import RatesUpdater
 
 db = DatabaseManager()
 
@@ -69,17 +74,68 @@ def save_portfolio(portfolio: Portfolio) -> None:
     db.save("portfolios.json", portfolios)
 
 
+
+
 def get_rate(from_code: str, to_code: str = "USD") -> dict:
-    """Получает курс валют из локального хранилища."""
+    """Получает курс валют с проверкой срока актуальности."""
+    from_code = from_code.upper()
+    to_code = to_code.upper()
+
     get_currency(from_code)
     get_currency(to_code)
 
-    rates = db.load("rates.json", {"pairs": {}, "last_refresh": None})
-    pair = f"{from_code.upper()}_{to_code.upper()}"
+    settings = SettingsLoader()
+    ttl = settings.get("RATES_TTL_SECONDS", 3600)
+
+    rates = db.load(
+        "rates.json",
+        {"pairs": {}, "last_refresh": None},
+    )
+
+    last_refresh = rates.get("last_refresh")
+    is_expired = True
+
+    if last_refresh:
+        try:
+            updated_at = datetime.fromisoformat(last_refresh)
+
+            if updated_at.tzinfo is None:
+                updated_at = updated_at.replace(tzinfo=timezone.utc)
+
+            age = (
+                datetime.now(timezone.utc) - updated_at
+            ).total_seconds()
+
+            is_expired = age > ttl
+
+        except (ValueError, TypeError):
+            is_expired = True
+
+    if is_expired:
+        try:
+            RatesUpdater().run_update()
+            rates = db.load(
+                "rates.json",
+                {"pairs": {}, "last_refresh": None},
+            )
+        except ApiRequestError as error:
+            raise ApiRequestError(
+                f"Не удалось обновить курсы: {error}"
+            ) from error
+
+    pair = f"{from_code}_{to_code}"
+    reverse_pair = f"{to_code}_{from_code}"
+
     rate = rates.get("pairs", {}).get(pair)
 
     if rate is None:
-        if from_code.upper() == to_code.upper():
+        reverse_rate = rates.get("pairs", {}).get(reverse_pair)
+
+        if reverse_rate is not None and float(reverse_rate) != 0:
+            rate = 1 / float(reverse_rate)
+
+    if rate is None:
+        if from_code == to_code:
             rate = 1.0
         else:
             raise CurrencyNotFoundError(pair)
